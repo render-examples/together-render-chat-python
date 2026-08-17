@@ -16,8 +16,17 @@ PUBLIC_DIR = Path(__file__).resolve().parent / "public"
 app = FastAPI()
 
 
+class ChatTurn(BaseModel):
+    role: str
+    content: str
+
+
 class ChatRequest(BaseModel):
     message: str
+
+
+class UiChatRequest(BaseModel):
+    messages: list[ChatTurn]
 
 
 def require_message(raw: str) -> str:
@@ -30,7 +39,26 @@ def require_message(raw: str) -> str:
     return message
 
 
-async def complete_chat(message: str) -> dict:
+def require_messages(turns: list[ChatTurn]) -> list[dict[str, str]]:
+    cleaned: list[dict[str, str]] = []
+    for turn in turns[-40:]:
+        role = turn.role.strip()
+        content = turn.content.strip()
+        if role not in ("user", "assistant") or not content or len(content) > 8000:
+            raise HTTPException(
+                status_code=400,
+                detail='Each message needs role "user" or "assistant" and 1 to 8000 characters.',
+            )
+        cleaned.append({"role": role, "content": content})
+    if not cleaned or cleaned[-1]["role"] != "user":
+        raise HTTPException(
+            status_code=400,
+            detail="Conversation must end with a user message.",
+        )
+    return cleaned
+
+
+async def complete_chat(messages: list[dict[str, str]]) -> dict:
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             upstream = await client.post(
@@ -38,7 +66,7 @@ async def complete_chat(message: str) -> dict:
                 headers={"Authorization": f"Bearer {TOGETHER_API_KEY}"},
                 json={
                     "model": MODEL,
-                    "messages": [{"role": "user", "content": message}],
+                    "messages": messages,
                     "reasoning": {"enabled": False},
                     "max_tokens": 512,
                 },
@@ -109,12 +137,14 @@ async def chat(
             detail="Unauthorized",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return await complete_chat(require_message(req.message))
+    return await complete_chat(
+        [{"role": "user", "content": require_message(req.message)}]
+    )
 
 
 @app.post("/ui/chat")
-async def ui_chat(req: ChatRequest):
-    return await complete_chat(require_message(req.message))
+async def ui_chat(req: UiChatRequest):
+    return await complete_chat(require_messages(req.messages))
 
 
 app.mount("/", StaticFiles(directory=PUBLIC_DIR, html=True), name="public")

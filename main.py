@@ -20,37 +20,17 @@ class ChatRequest(BaseModel):
     message: str
 
 
-@app.get("/health")
-def health():
-    return {"ok": True, "model": MODEL}
-
-
-@app.post("/chat")
-async def chat(
-    req: ChatRequest,
-    authorization: str | None = Header(default=None),
-):
-    supplied_key = (
-        authorization.removeprefix("Bearer ")
-        if authorization and authorization.startswith("Bearer ")
-        else ""
-    )
-    if not supplied_key or not secrets.compare_digest(
-        supplied_key, CHAT_API_KEY
-    ):
-        raise HTTPException(
-            status_code=401,
-            detail="Unauthorized",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    message = req.message.strip()
+def require_message(raw: str) -> str:
+    message = raw.strip()
     if not message or len(message) > 8000:
         raise HTTPException(
             status_code=400,
             detail='Field "message" must contain 1 to 8000 characters.',
         )
+    return message
 
+
+async def complete_chat(message: str) -> dict:
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             upstream = await client.post(
@@ -104,6 +84,37 @@ async def chat(
         "reply": reply,
         "usage": data.get("usage"),
     }
+
+
+@app.get("/health")
+def health():
+    return {"ok": True, "model": MODEL}
+
+
+@app.post("/chat")
+async def chat(
+    req: ChatRequest,
+    authorization: str | None = Header(default=None),
+):
+    supplied_key = (
+        authorization.removeprefix("Bearer ")
+        if authorization and authorization.startswith("Bearer ")
+        else ""
+    )
+    if not supplied_key or not secrets.compare_digest(
+        supplied_key, CHAT_API_KEY
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return await complete_chat(require_message(req.message))
+
+
+@app.post("/ui/chat")
+async def ui_chat(req: ChatRequest):
+    return await complete_chat(require_message(req.message))
 
 
 app.mount("/", StaticFiles(directory=PUBLIC_DIR, html=True), name="public")

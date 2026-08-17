@@ -16,46 +16,17 @@ PUBLIC_DIR = Path(__file__).resolve().parent / "public"
 app = FastAPI()
 
 
+class ChatRequest(BaseModel):
+    message: str
+
+
 class ChatTurn(BaseModel):
     role: str
     content: str
 
 
-class ChatRequest(BaseModel):
-    message: str
-
-
 class UiChatRequest(BaseModel):
     messages: list[ChatTurn]
-
-
-def require_message(raw: str) -> str:
-    message = raw.strip()
-    if not message or len(message) > 8000:
-        raise HTTPException(
-            status_code=400,
-            detail='Field "message" must contain 1 to 8000 characters.',
-        )
-    return message
-
-
-def require_messages(turns: list[ChatTurn]) -> list[dict[str, str]]:
-    cleaned: list[dict[str, str]] = []
-    for turn in turns[-40:]:
-        role = turn.role.strip()
-        content = turn.content.strip()
-        if role not in ("user", "assistant") or not content or len(content) > 8000:
-            raise HTTPException(
-                status_code=400,
-                detail='Each message needs role "user" or "assistant" and 1 to 8000 characters.',
-            )
-        cleaned.append({"role": role, "content": content})
-    if not cleaned or cleaned[-1]["role"] != "user":
-        raise HTTPException(
-            status_code=400,
-            detail="Conversation must end with a user message.",
-        )
-    return cleaned
 
 
 async def complete_chat(messages: list[dict[str, str]]) -> dict:
@@ -83,7 +54,7 @@ async def complete_chat(messages: list[dict[str, str]]) -> dict:
         ) from exc
 
     if not upstream.is_success:
-        print("Together error", upstream.status_code, upstream.text[:500])
+        print("Together error", upstream.status_code, upstream.text)
         raise HTTPException(
             status_code=502,
             detail={
@@ -116,7 +87,7 @@ async def complete_chat(messages: list[dict[str, str]]) -> dict:
 
 @app.get("/health")
 def health():
-    return {"ok": True, "model": MODEL}
+    return {"ok": True, model: MODEL}
 
 
 @app.post("/chat")
@@ -137,9 +108,34 @@ async def chat(
             detail="Unauthorized",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return await complete_chat(
-        [{"role": "user", "content": require_message(req.message)}]
-    )
+
+    message = req.message.strip()
+    if not message or len(message) > 8000:
+        raise HTTPException(
+            status_code=400,
+            detail='Field "message" must contain 1 to 8000 characters.',
+        )
+
+    return await complete_chat([{"role": "user", "content": message}])
+
+
+def require_messages(turns: list[ChatTurn]) -> list[dict[str, str]]:
+    cleaned: list[dict[str, str]] = []
+    for turn in turns[-40:]:
+        role = turn.role.strip()
+        content = turn.content.strip()
+        if role not in ("user", "assistant") or not content or len(content) > 8000:
+            raise HTTPException(
+                status_code=400,
+                detail='Each message needs role "user" or "assistant" and 1 to 8000 characters.',
+            )
+        cleaned.append({"role": role, "content": content})
+    if not cleaned or cleaned[-1]["role"] != "user":
+        raise HTTPException(
+            status_code=400,
+            detail="Conversation must end with a user message.",
+        )
+    return cleaned
 
 
 @app.post("/ui/chat")
